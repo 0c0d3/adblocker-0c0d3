@@ -37,51 +37,56 @@ const blockListUrls = [
   "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_22_Annoyances_Widgets/filter.txt",
   "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_10_Useful/filter.txt"
 ];
+// Function to fetch and process block lists in parallel
+const MAX_RULES_PER_BATCH = 1500; // Define a batch size, adjust as needed
 
-// Check if blockListUrls is already declared
-if (typeof blockListUrls === 'undefined') {
-  const blockListUrls = [
-    // Your list of URLs
-
-  ];
-}
-
-// Function to fetch and process block lists
 async function generateRules() {
-  let rules = [];
+  const rules = [];
+  const seenDomains = new Set(); // For faster duplicate checking
   let idCounter = 1;
 
-  for (const url of blockListUrls) {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
-      }
-      const text = await response.text();
+  try {
+    // Fetch all block lists in parallel
+    const responses = await Promise.all(
+      blockListUrls.map(url => fetch(url).then(response => {
+        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+        return response.text(); // Return text directly
+      }).catch(error => {
+        console.error(`Failed to fetch ${url}: ${error.message}`);
+        return null; // Return null for failed requests
+      }))
+    );
 
-      // Process each line of the blocklist
-      text.split("\n").forEach(line => {
-        // Skip empty lines and comments
-        if (line && !line.startsWith("#")) {
-          const domain = line.trim().replace(/^(0\.0\.0\.0|127\.0\.0\.1)\s+/, "");
-          if (domain) {
-            // Ensure the URL filter is properly formatted
-            const formattedDomain = `||${domain}^`;
-            rules.push({
-              id: idCounter++,
-              priority: 1,
-              action: { type: "block" },
-              condition: {
-                urlFilter: formattedDomain,
-                resourceTypes: ["main_frame", "sub_frame", "script", "image", "xmlhttprequest"]
-              }
-            });
+    // Process each block list's text content
+    responses.forEach((text, index) => {
+      if (text) {
+        console.log(`Processing block list from URL: ${blockListUrls[index]}`);
+        const lines = text.split("\n");
+
+        // Process in batches for efficiency
+        for (const line of lines) {
+          if (line && !line.startsWith("#")) {
+            const domain = line.trim().replace(/^(0\.0\.0\.0|127\.0\.0\.1)\s+/, "");
+            if (domain && domain.includes(".") && !seenDomains.has(domain)) {
+              seenDomains.add(domain);
+              rules.push({
+                id: idCounter++,
+                priority: 1,
+                action: { type: "block" },
+                condition: {
+                  urlFilter: `||${domain}^`,
+                  resourceTypes: ["main_frame", "sub_frame", "script", "image", "xmlhttprequest"]
+                }
+              });
+            }
           }
         }
-      });
-    } catch (error) {
-      console.error(`Failed to fetch or process ${url}: ${error}`);
-    }
+      } else {
+        console.warn(`Skipping block list at index ${index} due to fetch failure.`);
+      }
+    });
+  } catch (error) {
+    console.error(`Error processing blocklists: ${error.message}`);
   }
 
   console.log(`Generated ${rules.length} rules from blocklists.`);
@@ -91,15 +96,19 @@ async function generateRules() {
 // Load the rules into declarativeNetRequest
 generateRules().then(rules => {
   if (rules.length > 0) {
-    chrome.declarativeNetRequest.updateDynamicRules({
-      addRules: rules,
-      removeRuleIds: rules.map(rule => rule.id)
-    }, () => {
-      if (chrome.runtime.lastError) {
-        console.error(`Failed to update dynamic rules: ${chrome.runtime.lastError}`);
-      } else {
-        console.log(`Successfully added ${rules.length} new rules.`);
-      }
+    chrome.declarativeNetRequest.getDynamicRules(existingRules => {
+      const existingRuleIds = existingRules.map(rule => rule.id);
+
+      chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: existingRuleIds, // remove old rules
+        addRules: rules // add new rules
+      }, () => {
+        if (chrome.runtime.lastError) {
+          console.error(`Failed to update dynamic rules: ${chrome.runtime.lastError.message}`);
+        } else {
+          console.log(`Successfully added ${rules.length} new rules.`);
+        }
+      });
     });
   } else {
     console.log("No rules to add.");
