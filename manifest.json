@@ -14,15 +14,17 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://www.youtube.com/*"],
-      "js": ["content.js"],
+      "matches": ["*://*/*"],
+      "js": ["content.js", "userscript.js"], 
       "run_at": "document_start"
     }
   ],
   "host_permissions": [
     "*://*/*"
   ],
+ 
   "action": {
     "default_popup": "popup.html"
   }
 }
+
