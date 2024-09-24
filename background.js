@@ -37,8 +37,10 @@ const blockListUrls = [
   "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_22_Annoyances_Widgets/filter.txt",
   "https://raw.githubusercontent.com/AdguardTeam/FiltersRegistry/master/filters/filter_10_Useful/filter.txt"
 ];
-// Function to fetch and process block lists in parallel
-const MAX_RULES_PER_BATCH = 1500; // Define a batch size, adjust as needed
+
+// Constants
+const MAX_RULES_PER_BATCH = 1000; // Define a batch size, adjust as needed
+const UPDATE_INTERVAL = 300000; // 5 minutes in milliseconds
 
 async function generateRules() {
   const rules = [];
@@ -63,7 +65,7 @@ async function generateRules() {
         console.log(`Processing block list from URL: ${blockListUrls[index]}`);
         const lines = text.split("\n");
 
-        // Process in batches for efficiency
+        // Process each line of the block list
         for (const line of lines) {
           if (line && !line.startsWith("#")) {
             const domain = line.trim().replace(/^(0\.0\.0\.0|127\.0\.0\.1)\s+/, "");
@@ -93,15 +95,16 @@ async function generateRules() {
   return rules;
 }
 
-// Load the rules into declarativeNetRequest
-generateRules().then(rules => {
+// Function to load rules into declarativeNetRequest
+async function loadRules() {
+  const rules = await generateRules();
   if (rules.length > 0) {
     chrome.declarativeNetRequest.getDynamicRules(existingRules => {
       const existingRuleIds = existingRules.map(rule => rule.id);
 
       chrome.declarativeNetRequest.updateDynamicRules({
         removeRuleIds: existingRuleIds, // remove old rules
-        addRules: rules // add new rules
+        addRules: rules.slice(0, MAX_RULES_PER_BATCH) // add new rules, limited to MAX_RULES_PER_BATCH
       }, () => {
         if (chrome.runtime.lastError) {
           console.error(`Failed to update dynamic rules: ${chrome.runtime.lastError.message}`);
@@ -113,4 +116,8 @@ generateRules().then(rules => {
   } else {
     console.log("No rules to add.");
   }
-});
+}
+
+// Update rules initially and then set interval for updates
+loadRules(); // Initial call to load rules
+setInterval(loadRules, UPDATE_INTERVAL); // Run updates every 5 minutes
